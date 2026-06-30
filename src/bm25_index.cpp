@@ -2,7 +2,6 @@
 
 #include <cmath>
 #include <algorithm>
-#include <set>
 
 namespace rag {
 

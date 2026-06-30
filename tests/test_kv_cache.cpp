@@ -3,6 +3,7 @@
 #include <iostream>
 #include <cassert>
 #include <cstring>
+#include <vector>
 
 using namespace rag;
 
@@ -46,42 +47,34 @@ static void test_page_alloc_and_reuse() {
     TEST("Page allocation and exact-match reuse");
     PageManager mgr;
 
-    auto sys_tokens = make_tokens(1000, 16);  // 16 system prompt tokens
-    auto ctx_tokens = make_tokens(2000, 16);  // 16 context tokens
+    auto sys_tokens  = make_tokens(1000, 16);
+    auto ctx_tokens  = make_tokens(2000, 16);
+    auto ctx_tokens2 = make_tokens(3000, 16);
 
-    // First mapping: allocates new blocks
-    std::vector<int> all1;
-    all1.insert(all1.end(), sys_tokens.begin(), sys_tokens.end());
+    std::vector<int> all1(sys_tokens.begin(), sys_tokens.end());
     all1.insert(all1.end(), ctx_tokens.begin(), ctx_tokens.end());
 
     auto blocks1 = mgr.map_tokens_to_blocks(all1);
     if (blocks1.size() != 2) { FAIL("expected 2 blocks, got " + std::to_string(blocks1.size())); return; }
 
-    // Pin system prompt block
     mgr.pin_block(blocks1[0]);
 
-    // Second mapping with same system + DIFFERENT context
-    auto ctx_tokens2 = make_tokens(3000, 16);
-    std::vector<int> all2;
-    all2.insert(all2.end(), sys_tokens.begin(), sys_tokens.end());
+    std::vector<int> all2(sys_tokens.begin(), sys_tokens.end());
     all2.insert(all2.end(), ctx_tokens2.begin(), ctx_tokens2.end());
 
     auto blocks2 = mgr.map_tokens_to_blocks(all2);
-
     if (blocks2.size() != 2) { FAIL("expected 2 blocks in second mapping"); return; }
 
-    // System prompt block should be REUSED (same content hash)
+    // System prompt block should be REUSED (same content hash).
     if (blocks2[0] != blocks1[0]) {
         FAIL("system prompt block not reused (hash miss)");
         return;
     }
-
-    // Context block should be DIFFERENT
+    // Context block should be DIFFERENT (different content).
     if (blocks2[1] == blocks1[1]) {
         FAIL("context block incorrectly reused (different content)");
         return;
     }
-
     PASS();
 }
 
@@ -92,19 +85,13 @@ static void test_hash_collision_defense() {
     auto tokens_a = make_tokens(100, 16);
     auto blocks_a = mgr.map_tokens_to_blocks(tokens_a);
 
-    // Different tokens — will hash differently (almost certainly)
     auto tokens_b = make_tokens(999, 16);
     auto blocks_b = mgr.map_tokens_to_blocks(tokens_b);
 
-    // Different content → different blocks or hash miss
-    // The key invariant: KVCacheTag snapshot check prevents false reuse
     if (blocks_a[0] == blocks_b[0]) {
-        // This is only OK if the hashes are truly identical AND tokens match
-        // (which they shouldn't be for different token sequences)
         FAIL("different tokens mapped to same block (unexpected)");
         return;
     }
-
     PASS();
 }
 
@@ -112,31 +99,29 @@ static void test_eviction() {
     TEST("Unpinned blocks evicted correctly");
     PageManager mgr;
 
-    // Fill up pages and release all
-    std::vector<int> block_ids;
+    // Fill up pages and release all references.
+    std::vector<int> all_block_ids;
     for (int i = 0; i < KV_MAX_PAGES; ++i) {
         auto tokens = make_tokens(i * 100, 16);
         auto bids = mgr.map_tokens_to_blocks(tokens);
-        block_ids.insert(block_ids.end(), bids.begin(), bids.end());
+        all_block_ids.insert(all_block_ids.end(), bids.begin(), bids.end());
     }
 
-    // Release all blocks (ref_count → 0)
-    for (int bid : block_ids) {
+    // Release all blocks (ref_count → 0).
+    for (int bid : all_block_ids) {
         mgr.release_block(bid);
     }
 
-    // Pin block 0
+    // Pin block 0; it should be preserved.
     mgr.pin_block(0);
 
     int evicted = mgr.evict_context_blocks(5);
     if (evicted < 1) { FAIL("no blocks evicted"); return; }
 
-    // Block 0 should still be pinned
     if (!mgr.is_block_pinned(0)) {
         FAIL("pinned block was evicted");
         return;
     }
-
     PASS();
 }
 
@@ -153,6 +138,43 @@ static void test_slice_boundary() {
     PASS();
 }
 
+static void test_release_block() {
+    TEST("release_block decrements ref_count");
+    PageManager mgr;
+    auto tokens = make_tokens(42, 16);
+    auto blocks = mgr.map_tokens_to_blocks(tokens);
+
+    // After map: ref_count == 1. Release once → 0.
+    mgr.release_block(blocks[0]);
+    // Now a fresh mapping with the same content should reuse the block.
+    auto blocks2 = mgr.map_tokens_to_blocks(tokens);
+    if (blocks2[0] != blocks[0]) {
+        FAIL("released block not reused on re-mapping");
+        return;
+    }
+    PASS();
+}
+
+static void test_mark_clean() {
+    TEST("mark_clean clears the dirty flag");
+    PageManager mgr;
+    auto tokens = make_tokens(7, 16);
+    auto blocks = mgr.map_tokens_to_blocks(tokens);
+
+    mgr.mark_clean(blocks[0]);
+
+    // A second mapping of the same content should be reported as not-dirty
+    // (i.e. no prefill required). The cleanest way to verify is to inspect
+    // collect_prefill_tokens on a fresh all_tokens sequence.
+    std::vector<int> all_tokens = tokens;
+    auto prefill = mgr.collect_prefill_tokens(blocks, all_tokens);
+    if (!prefill.empty()) {
+        FAIL("prefill tokens returned for a clean block");
+        return;
+    }
+    PASS();
+}
+
 int main() {
     std::cout << "=== KV Cache Tests ===" << std::endl;
 
@@ -161,6 +183,8 @@ int main() {
     test_hash_collision_defense();
     test_eviction();
     test_slice_boundary();
+    test_release_block();
+    test_mark_clean();
 
     std::cout << "\nResults: " << tests_passed << "/" << tests_run << " passed." << std::endl;
     return (tests_passed == tests_run) ? 0 : 1;

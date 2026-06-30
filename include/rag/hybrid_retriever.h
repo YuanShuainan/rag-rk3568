@@ -2,7 +2,6 @@
 
 #include "types.h"
 #include "bm25_index.h"
-#include "embedding.h"
 #include "tokenizer.h"
 
 #include <string>
@@ -11,6 +10,8 @@
 #include <unordered_map>
 
 namespace rag {
+
+class Embedding;  // forward decl avoids leaking ONNX headers here
 
 // Two-stage retrieval pipeline:
 //   Stage 1: BM25 coarse retrieval (top-K candidates)

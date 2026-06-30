@@ -5,6 +5,8 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
+option(BUILD_TESTS "Build unit tests" ON)
+
 # ---- Cross-compilation (uncomment for LubanCat 2) ----
 # set(CMAKE_SYSTEM_NAME Linux)
 # set(CMAKE_SYSTEM_PROCESSOR aarch64)
@@ -39,7 +41,8 @@ set(RAG_HEADERS
     include/rag/context_builder.h
     include/rag/kv_cache.h
     include/rag/llm_inference.h
-    include/rag/rag_pipeline.h)
+    include/rag/rag_pipeline.h
+    include/rag/logger.h)
 
 set(RAG_SOURCES
     src/tokenizer.cpp
@@ -57,6 +60,10 @@ target_include_directories(rag PUBLIC
     ${CMAKE_SOURCE_DIR}/include
     ${SPDLOG_INCLUDE_DIR})
 target_compile_options(rag PRIVATE -Wall -Wextra -O2 -march=armv8-a)
+
+if(SPDLOG_INCLUDE_DIR)
+    target_compile_definitions(rag PUBLIC RAG_HAS_SPDLOG=1)
+endif()
 
 if(ONNXRUNTIME_LIB)
     target_link_libraries(rag PUBLIC ${ONNXRUNTIME_LIB})
@@ -76,8 +83,10 @@ target_compile_options(rag_cli PRIVATE -Wall -Wextra -O2)
 
 # ---- Tests ----
 
-enable_testing()
-add_subdirectory(tests)
+if(BUILD_TESTS)
+    enable_testing()
+    add_subdirectory(tests)
+endif()
 
 # ---- Install ----
 

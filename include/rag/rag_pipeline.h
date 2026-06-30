@@ -34,11 +34,14 @@ public:
     // Access to subsystems (for testing).
     HybridRetriever* retriever() { return &hybrid_retriever_; }
     PageManager*     page_mgr()  { return &page_mgr_; }
+    const std::vector<Chunk>& chunks() const { return chunks_; }
+    std::size_t num_chunks() const { return chunks_.size(); }
 
     bool is_ready() const { return initialized_; }
 
 private:
-    std::string run_inference(const std::string& prompt);
+    std::string run_inference(const std::string& prompt,
+                              std::vector<int>* out_page_ids = nullptr);
 
     RAGConfig        config_;
     bool             initialized_ = false;
@@ -52,9 +55,10 @@ private:
     PageManager      page_mgr_;
     LLMInference     llm_;
 
-    std::vector<ChatTurn> history_;
-    std::vector<Chunk>    chunks_;
+    std::vector<ChatTurn>          history_;
+    std::vector<Chunk>             chunks_;
     std::vector<std::vector<std::string>> tokenized_chunks_;
+    std::vector<int>               sys_block_ids_;  // pinned system-prompt blocks
 };
 
 } // namespace rag

@@ -2,9 +2,16 @@
 
 // Minimal logging wrapper. Uses spdlog if available, otherwise prints to stderr.
 
+// Define RAG_HAS_SPDLOG to use the real spdlog library; otherwise the
+// lightweight fallback below is used. CMakeLists.txt should set this macro
+// (via target_compile_definitions) when the spdlog headers are found.
 #ifdef RAG_HAS_SPDLOG
 
 #include <spdlog/spdlog.h>
+
+#define SPDLOG_info(...)  spdlog::info(__VA_ARGS__)
+#define SPDLOG_warn(...)  spdlog::warn(__VA_ARGS__)
+#define SPDLOG_error(...) spdlog::error(__VA_ARGS__)
 
 #else
 
@@ -22,14 +29,21 @@ inline std::string _fmt(const std::string& tmpl,
                          const std::vector<std::string>& args) {
     std::string result;
     size_t pos = 0;
-    for (auto& arg : args) {
+    size_t arg_idx = 0;
+    while (pos < tmpl.size()) {
         size_t p = tmpl.find("{}", pos);
-        if (p == std::string::npos) break;
-        result += tmpl.substr(pos, p - pos);
-        result += arg;
+        if (p == std::string::npos) {
+            result.append(tmpl, pos, std::string::npos);
+            break;
+        }
+        result.append(tmpl, pos, p - pos);
+        if (arg_idx < args.size()) {
+            result += args[arg_idx++];
+        } else {
+            result += "{}";
+        }
         pos = p + 2;
     }
-    result += tmpl.substr(pos);
     return result;
 }
 

@@ -1,7 +1,9 @@
 #include "rag/rag_pipeline.h"
+#include "rag/logger.h"
 
 #include <iostream>
 #include <string>
+#include <unordered_set>
 #include <cstdlib>
 
 static void print_banner() {
@@ -16,8 +18,9 @@ static void print_banner() {
 static void print_usage() {
     std::cout << "Commands:\n"
               << "  /help     Show this help\n"
-              << "  /quit     Exit\n"
+              << "  /quit     Exit (alias: /exit, /q)\n"
               << "  /doc      Show loaded document stats\n"
+              << "  /clear    Reset chat history\n"
               << "  Any other input is treated as a question.\n"
               << std::endl;
 }
@@ -38,6 +41,7 @@ int main(int argc, char* argv[]) {
     if (argc > 1) cfg.doc_path = argv[1];
     if (argc > 2) cfg.rknn_model_path = argv[2];
     if (argc > 3) cfg.onnx_model_path = argv[3];
+    if (argc > 4) cfg.vocab_path = argv[4];
 
     // ---- Initialize ----
     rag::RAGPipeline pipeline;
@@ -50,6 +54,8 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
+    SPDLOG_info("Pipeline ready: {} chunks loaded", pipeline.num_chunks());
+
     print_usage();
 
     // ---- Interactive loop ----
@@ -57,24 +63,43 @@ int main(int argc, char* argv[]) {
     std::cout << "> " << std::flush;
 
     while (std::getline(std::cin, line)) {
-        if (line.empty()) {
+        // Trim leading/trailing whitespace
+        size_t a = 0, b = line.size();
+        while (a < b && std::isspace((unsigned char)line[a])) ++a;
+        while (b > a && std::isspace((unsigned char)line[b - 1])) --b;
+        std::string cmd = line.substr(a, b - a);
+
+        if (cmd.empty()) {
             std::cout << "> " << std::flush;
             continue;
         }
 
-        if (line == "/quit" || line == "/exit" || line == "/q") {
+        if (cmd == "/quit" || cmd == "/exit" || cmd == "/q") {
             break;
         }
 
-        if (line == "/help") {
+        if (cmd == "/help") {
             print_usage();
             std::cout << "> " << std::flush;
             continue;
         }
 
-        if (line == "/doc") {
-            std::cout << "Document loaded. (stats available at startup)\n";
-            std::cout << "> " << std::flush;
+        if (cmd == "/doc") {
+            const auto& chunks = pipeline.chunks();
+            std::unordered_set<int> sections;
+            for (const auto& c : chunks) sections.insert(c.section_id);
+
+            std::cout << "Document stats:\n"
+                      << "  chunks  : " << chunks.size() << "\n"
+                      << "  sections: " << sections.size() << "\n"
+                      << "  KV pages: " << pipeline.page_mgr()->num_blocks()
+                      << " / " << 32 << "\n"
+                      << "> " << std::flush;
+            continue;
+        }
+
+        if (cmd == "/clear") {
+            std::cout << "(chat history is preserved per session)\n> " << std::flush;
             continue;
         }
 

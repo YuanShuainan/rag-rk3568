@@ -35,22 +35,23 @@ struct KVCacheTag {
 
     bool matches(const std::vector<int>& tokens) const {
         return token_snapshot.size() == tokens.size() &&
-               std::memcmp(token_snapshot.data(), tokens.data(),
-                           tokens.size() * sizeof(int)) == 0;
+               (tokens.empty() ||
+                std::memcmp(token_snapshot.data(), tokens.data(),
+                            tokens.size() * sizeof(int)) == 0);
     }
 };
 
 struct KVBlock {
-    int         block_id;
-    uint64_t    content_hash;
-    bool        pinned   = false;  // system prompt blocks: never evict
-    int         ref_count = 0;
-    bool        dirty    = false;  // needs prefill on next use
-    void*       kv_dma_buf = nullptr;   // ION/DMA-BUF physical memory pointer
+    int         block_id     = 0;
+    uint64_t    content_hash = 0;
+    bool        pinned       = false;  // system prompt blocks: never evict
+    int         ref_count    = 0;
+    bool        dirty        = false;  // needs prefill on next use
+    void*       kv_dma_buf   = nullptr;  // ION/DMA-BUF physical memory pointer
 
     // Logical-to-physical token range this block covers in the current sequence
-    int         seq_start = -1;
-    int         seq_end   = -1;
+    int         seq_start    = -1;
+    int         seq_end      = -1;
 };
 
 class PageManager {
@@ -72,18 +73,26 @@ public:
     // Release a block reference. Unpinned blocks with ref_count=0 are evictable.
     void release_block(int block_id);
 
+    // Mark a block as clean (its KV cache is now valid in NPU memory).
+    void mark_clean(int block_id);
+
     // Evict context blocks to make room. Returns number of blocks evicted.
     int  evict_context_blocks(int count);
 
-    int  num_blocks() const { return blocks_.size(); }
+    int  num_blocks() const { return (int)blocks_.size(); }
     int  num_free_slots() const;
     bool is_block_pinned(int block_id) const;
+    int  find_block_by_hash(const std::vector<int>& tokens) const;
 
 private:
-    int  alloc_block(const std::vector<int>& tokens);
+    // Reuse an existing slot: clear its state and return its block_id.
+    // Returns -1 if no slot is available.
+    int  reuse_slot(const std::vector<int>& tokens);
+    int  alloc_new_block(const std::vector<int>& tokens);
+    void remove_hash_for_block(int block_id);
 
-    std::vector<KVBlock>                                      blocks_;
-    std::unordered_map<uint64_t, KVCacheTag>                  hash_to_block_;
+    std::vector<KVBlock>                          blocks_;
+    std::unordered_map<uint64_t, KVCacheTag>      hash_to_block_;
 };
 
 } // namespace rag

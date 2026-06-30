@@ -2,10 +2,6 @@
 
 #ifdef RAG_HAS_ONNX
 #include <onnxruntime_cxx_api.h>
-#else
-#include <cstring>
-#include <cstdlib>
-#include <stdexcept>
 #endif
 
 #include <algorithm>
@@ -13,11 +9,13 @@
 
 namespace rag {
 
-Embedding::~Embedding() {
+Embedding::~Embedding() = default;
+
+bool Embedding::is_ready() const {
 #ifdef RAG_HAS_ONNX
-    delete static_cast<Ort::MemoryInfo*>(mem_info_);
-    delete static_cast<Ort::Session*>(session_);
-    delete static_cast<Ort::Env*>(env_);
+    return session_ != nullptr;
+#else
+    return false;
 #endif
 }
 
@@ -26,8 +24,7 @@ bool Embedding::init(const Config& cfg) {
 
 #ifdef RAG_HAS_ONNX
     try {
-        Ort::Env* e = new Ort::Env(ORT_LOGGING_LEVEL_WARNING, "rag_embed");
-        env_ = e;
+        env_ = std::make_unique<Ort::Env>(ORT_LOGGING_LEVEL_WARNING, "rag_embed");
 
         Ort::SessionOptions opts;
         opts.SetIntraOpNumThreads(1);
@@ -37,21 +34,24 @@ bool Embedding::init(const Config& cfg) {
         opts.DisableCpuMemArena();                  // no arena allocator on aarch64
         opts.SetGraphOptimizationLevel(GraphOptimizationLevel::ORT_ENABLE_EXTENDED);
 
-        Ort::Session* s = new Ort::Session(*e, cfg.model_path.c_str(), opts);
-        session_ = s;
+        session_ = std::make_unique<Ort::Session>(*env_, cfg.model_path.c_str(), opts);
 
-        Ort::MemoryInfo* m = new Ort::MemoryInfo(
+        mem_info_ = std::make_unique<Ort::MemoryInfo>(
             Ort::MemoryInfo::CreateCpu(OrtArenaAllocator, OrtMemTypeDefault));
-        mem_info_ = m;
 
         return true;
     } catch (const std::exception& ex) {
+        SPDLOG_error("Failed to init ONNX embedding: {}", ex.what());
+        env_.reset();
+        session_.reset();
+        mem_info_.reset();
         return false;
     }
 #else
     // No ONNX Runtime available — embeddings must be pre-computed or
     // provided via an external file. Return false to signal caller.
     (void)cfg;
+    SPDLOG_warn("RAG built without ONNX Runtime; embedding is disabled");
     return false;
 #endif
 }
@@ -60,6 +60,8 @@ std::vector<float> Embedding::encode_single(const std::string& text) {
     std::vector<float> result(cfg_.embedding_dim, 0.0f);
 
 #ifdef RAG_HAS_ONNX
+    if (!session_) return result;
+
     try {
         std::vector<int64_t> input_ids;
         std::vector<int64_t> attention_mask;
@@ -69,12 +71,10 @@ std::vector<float> Embedding::encode_single(const std::string& text) {
             return result;
         }
 
-        int seq_len = (int)input_ids.size();
+        int64_t seq_len = (int64_t)input_ids.size();
         std::vector<int64_t> shape = {1, seq_len};
 
-        Ort::Env*        e = static_cast<Ort::Env*>(env_);
-        Ort::Session*    s = static_cast<Ort::Session*>(session_);
-        Ort::MemoryInfo* m = static_cast<Ort::MemoryInfo*>(mem_info_);
+        Ort::MemoryInfo* m = mem_info_.get();
 
         Ort::Value input_tensor = Ort::Value::CreateTensor<int64_t>(
             *m, input_ids.data(), input_ids.size(), shape.data(), shape.size());
@@ -91,9 +91,9 @@ std::vector<float> Embedding::encode_single(const std::string& text) {
         inputs.push_back(std::move(mask_tensor));
         inputs.push_back(std::move(type_tensor));
 
-        auto outputs = s->Run(Ort::RunOptions{nullptr},
-                              input_names, inputs.data(), inputs.size(),
-                              output_names, 1);
+        auto outputs = session_->Run(Ort::RunOptions{nullptr},
+                                     input_names, inputs.data(), inputs.size(),
+                                     output_names, 1);
 
         if (!outputs.empty() && outputs[0].IsTensor()) {
             float* data = outputs[0].GetTensorMutableData<float>();
@@ -133,7 +133,7 @@ bool Embedding::build_input(const std::string& text,
     for (size_t i = 0; i < text.size(); ) {
         unsigned char c = (unsigned char)text[i];
         int len = 1;
-        if ((c & 0x80) == 0)       len = 1;
+        if      ((c & 0x80) == 0)    len = 1;
         else if ((c & 0xE0) == 0xC0) len = 2;
         else if ((c & 0xF0) == 0xE0) len = 3;
         else if ((c & 0xF8) == 0xF0) len = 4;
@@ -156,7 +156,7 @@ bool Embedding::build_input(const std::string& text,
     attention_mask.push_back(1);
     token_type_ids.push_back(0);
 
-    // Truncate to max_seq_len
+    // Truncate to max_seq_len (keep [SEP] at the end if truncating)
     if ((int)input_ids.size() > cfg_.max_seq_len) {
         input_ids.resize(cfg_.max_seq_len);
         attention_mask.resize(cfg_.max_seq_len);

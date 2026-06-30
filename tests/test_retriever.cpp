@@ -43,20 +43,17 @@ static void test_density_bonus() {
     auto chunks = loader.load("data/manual.txt");
     if (chunks.empty()) { FAIL("no chunks loaded"); return; }
 
-    // Build a minimal retriever without embedding
     HybridRetriever retriever;
     Tokenizer tok;
     auto tok_chunks = tokenize_chunks(tok, chunks);
 
-    Embedding emb;  // not initialized
+    // Build with a non-ready embedding — retriever should fall back to BM25.
+    Embedding emb;  // intentionally not initialized
     retriever.build_index(chunks, tok_chunks, &emb);
 
-    // Query for 保养灯复位
     auto results = retriever.retrieve("仪表盘有个小扳手亮了怎么消掉");
-
     if (results.empty()) { FAIL("no results"); return; }
 
-    // At least one result should be about warning lights (section 二 or 三)
     bool found = false;
     for (auto& r : results) {
         if (r.section_title.find("二") != std::string::npos ||
@@ -77,7 +74,6 @@ static void test_section_detection() {
     auto chunks = loader.load("data/manual.txt");
     if (chunks.empty()) { FAIL("no chunks loaded"); return; }
 
-    // Check that multiple sections exist
     bool has_section_2 = false;
     bool has_section_3 = false;
     for (auto& c : chunks) {
@@ -98,6 +94,7 @@ static void test_retrieval_without_onnx() {
     HybridRetriever retriever;
     Tokenizer tok;
     auto tok_chunks = tokenize_chunks(tok, chunks);
+
     Embedding emb;  // not initialized → BM25-only
     retriever.build_index(chunks, tok_chunks, &emb);
 
@@ -111,12 +108,30 @@ static void test_retrieval_without_onnx() {
     if (found_tire) { PASS(); } else { FAIL("no tire pressure in results"); }
 }
 
+static void test_retrieval_null_embedding() {
+    TEST("Retrieval works with null embedding pointer");
+    DocLoader loader;
+    auto chunks = loader.load("data/manual.txt");
+    if (chunks.empty()) { FAIL("no chunks loaded"); return; }
+
+    HybridRetriever retriever;
+    Tokenizer tok;
+    auto tok_chunks = tokenize_chunks(tok, chunks);
+
+    retriever.build_index(chunks, tok_chunks, /*embedding=*/nullptr);
+
+    auto results = retriever.retrieve("保养");
+    if (results.empty()) { FAIL("no results with null embedding"); return; }
+    PASS();
+}
+
 int main() {
     std::cout << "=== Retriever Tests ===" << std::endl;
 
     test_section_detection();
     test_density_bonus();
     test_retrieval_without_onnx();
+    test_retrieval_null_embedding();
 
     std::cout << "\nResults: " << tests_passed << "/" << tests_run << " passed." << std::endl;
     return (tests_passed == tests_run) ? 0 : 1;

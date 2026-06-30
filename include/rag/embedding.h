@@ -5,11 +5,16 @@
 #include <memory>
 #include <cmath>
 
-// Forward declare ORT types (avoid pulling full ONNX Runtime headers here)
-struct OrtEnv;
-struct OrtSession;
-struct OrtMemoryInfo;
-struct OrtValue;
+#ifdef RAG_HAS_ONNX
+// Forward-declare the C++ API types. The actual types live in
+// <onnxruntime_cxx_api.h>; we don't include that here to keep the header
+// light and to avoid leaking ONNX headers into every translation unit.
+namespace Ort {
+class Env;
+class Session;
+class MemoryInfo;
+} // namespace Ort
+#endif
 
 namespace rag {
 
@@ -27,8 +32,11 @@ public:
     Embedding() = default;
     ~Embedding();
 
+    Embedding(const Embedding&) = delete;
+    Embedding& operator=(const Embedding&) = delete;
+
     bool init(const Config& cfg);
-    bool is_ready() const { return session_ != nullptr; }
+    bool is_ready() const;
 
     // Encode a single text to a float vector [embedding_dim].
     // Thread-safe to call sequentially. Peak allocation ~8MB.
@@ -44,9 +52,11 @@ private:
 
     Config cfg_;
 
-    OrtEnv*        env_      = nullptr;
-    OrtSession*    session_  = nullptr;
-    OrtMemoryInfo* mem_info_ = nullptr;
+#ifdef RAG_HAS_ONNX
+    std::unique_ptr<Ort::Env>        env_;
+    std::unique_ptr<Ort::Session>    session_;
+    std::unique_ptr<Ort::MemoryInfo> mem_info_;
+#endif
 };
 
 // L2 normalization in-place.

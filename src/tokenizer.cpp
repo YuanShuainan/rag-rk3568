@@ -123,18 +123,18 @@ int Tokenizer::find_token_id(const std::string& token) const {
 
 std::vector<int> Tokenizer::encode(const std::string& text) const {
     std::vector<int> ids;
-    if (text.empty() || vocab_.empty()) return ids;
+    if (text.empty()) return ids;
 
-    // Simple character-level fallback when no BPE vocab:
-    // encode each UTF-8 byte as a token (for demo/testing).
-    // Real Qwen tokenizer uses BPE merging — this is the fallback path
-    // when the vocab file isn't available.
-    if (token_to_id_.empty()) {
+    // Character-level fallback when no BPE vocab was loaded:
+    // emit one token per UTF-8 character (using its first byte value).
+    // This is the path used during development / testing without a
+    // real Qwen vocab file. The model output will be nonsensical, but
+    // the pipeline still runs end-to-end.
+    if (token_to_id_.empty() && vocab_.empty()) {
         for (size_t i = 0; i < text.size(); ) {
-            // UTF-8 decode: determine char length
             unsigned char c = (unsigned char)text[i];
             int len = 1;
-            if ((c & 0x80) == 0)       len = 1;
+            if      ((c & 0x80) == 0)    len = 1;
             else if ((c & 0xE0) == 0xC0) len = 2;
             else if ((c & 0xF0) == 0xE0) len = 3;
             else if ((c & 0xF8) == 0xF0) len = 4;
@@ -142,10 +142,14 @@ std::vector<int> Tokenizer::encode(const std::string& text) const {
 
             if (i + len > text.size()) break;
 
-            // Map byte value directly for testing
             ids.push_back((int)(c));
             i += len;
         }
+        return ids;
+    }
+
+    if (token_to_id_.empty()) {
+        // Vocab exists but the lookup table is empty (corrupt vocab) — bail.
         return ids;
     }
 
